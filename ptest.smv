@@ -1,0 +1,269 @@
+---------------------------------------------------------------------------
+-- ELEVATOR                                                              --
+---------------------------------------------------------------------------
+
+MODULE Elevator(tick, move_cmd)
+  VAR 
+    moving              : boolean;
+    direction           : { up,down };
+	position            : { 10, 15, 20, 25, 30 };
+	doorOpened			: boolean;
+	button1Pressed      : boolean;
+	button2Pressed      : boolean;
+	button3Pressed      : boolean;
+	buttonOpenDoor      : boolean;
+    --cmd : {movingUp, movingDown, stop, openDoor, closeDoor};
+					  
+	DEFINE
+    elevButton1Serviced := (button1Pressed & elevatorPosition  =10 & doorOpened);
+	elevButton2Serviced := (button2Pressed & elevatorPosition  =20 & doorOpened);
+	elevButton3Serviced := (button3Pressed & elevatorPosition  =30 & doorOpened);
+	
+    ASSIGN
+    init(position) := 10;
+	--we need a logic to increase position when cmd is movingUp and movingDown 
+	--case
+	--	TRUE : case
+	--		tick = FALSE : value;
+	--      tick = TRUE : (value + 1) mod 10;	
+	-- 
+	next(position) :=
+		case		
+		move_cmd = movingUp	    :   case
+									position=30 : 30;
+									TRUE	 : position + 5;
+									esac;
+		
+		move_cmd = movingDown  : 	case 
+                                    position=10 : 10;
+                                    TRUE     : position - 5; 
+                                    esac;
+        TRUE : 10;
+		esac;							
+			
+	
+    init(moving) := FALSE;
+	next(moving) :=
+		case
+		move_cmd = stop         :	FALSE;
+		move_cmd = movingUp     :	TRUE;
+		move_cmd = movingDown   :	TRUE;
+		move_cmd = openDoor     :	FALSE;	
+		TRUE:moving;
+		esac;
+		
+	init(direction) := {up,down};
+	next(direction) :=
+      case
+        move_cmd = stop         : {up,down};
+        move_cmd = movingUp     : up;
+        move_cmd = movingDown   : down;
+        move_cmd = openDoor     : {up,down};
+		TRUE:direction;
+      esac;
+	
+	init(doorOpened) := TRUE;
+	next(doorOpened) :=
+      case
+        move_cmd = stop         : TRUE;
+        move_cmd = movingUp     : FALSE;
+        move_cmd = movingDown   : FALSE;
+        move_cmd = openDoor     : TRUE;
+		TRUE:doorOpened;
+      esac;
+	
+	init(button1Pressed) := FALSE;
+	--next(button1Pressed) :=
+	--	case
+	--	  move_cmd = stop         :	FALSE;
+	--	esac;	
+	
+	init(button2Pressed) := FALSE;
+	next(button2Pressed) :=
+		case
+		  move_cmd = stop         :	FALSE;
+		  TRUE	: button2Pressed;
+		esac;
+	
+	init(button3Pressed) := FALSE;
+		next(button3Pressed) :=
+		case
+		  move_cmd = stop         :	FALSE;
+		  TRUE	: button3Pressed;
+		esac;
+	
+	init(buttonOpenDoor) := TRUE;
+	next(buttonOpenDoor) :=
+		case
+		  move_cmd = stop         :	TRUE;
+		  TRUE	: buttonOpenDoor;
+		esac;
+    		  
+  -- Button N is serviced only if it is pressed, we are at position N, and
+  -- the door is open. 
+  -- service_1,2,3 are carry_out to which main use
+ 
+ DEFINE
+   
+	elevatorPosition := position;
+
+
+---------------------------------------------------------------------------
+-- FLOOR                                                                 --
+---------------------------------------------------------------------------
+
+MODULE Floor(floorPosition, elevatorPosition, doorOpened)
+  VAR 
+    reqButton    : boolean;
+	location     : { 10, 20, 30 };
+
+	ASSIGN
+	init(location)  := floorPosition;
+	next(location)  := floorPosition;
+
+    init(reqButton) := FALSE;
+	next(reqButton) :=
+		case
+		  serviced = TRUE         :	FALSE;
+		  TRUE	: reqButton;
+	 	esac;
+	  
+	DEFINE
+    serviced := (floorPosition = elevatorPosition & doorOpened); -- if elevator position and floorPoistion is same, it is service.
+
+    
+
+---------------------------------------------------------------------------
+-- CONTROLLER                                                            --
+---------------------------------------------------------------------------
+
+-- The controller takes as input (as sensory signals) the position and the
+-- direction of motion of the cabin, the status of the door, and the
+-- status of the four buttons. It decides the controls to the engine, to
+-- the door and to the buttons.
+
+MODULE CTRL(moving, dir, position, doorOpened, number1, number2, number3, btnFloor1, btnFloor2, btnFloor3)
+  VAR 
+    cmd : {movingUp, movingDown, stop, openDoor,closeDoor,nothing};
+    door_cmd : {openDoor, closeDoor, nothing};
+
+  -- Check whether there are pending requests at the current position,
+  -- at a higher position, and at a lower position.
+  DEFINE
+    pending_here := (position = 10 & number1) | (position = 20 & number2) |
+                    (position = 30 & number3) ;   
+
+    pending_up   := (position = 10 & ( number2 | number3 )) |
+                    (position = 20 & (             number3 ));
+
+    pending_down := (position = 30 & ( number1 | number2 )) |
+                    (position = 20 & ( number1             )) ;
+	
+	
+  -- Variable "last_dir" records the last movement direction of the cabin.
+  VAR 
+    last_dir : {up,down};
+  ASSIGN 
+    next(last_dir) :=
+      case
+        !moving : last_dir;
+        TRUE    : dir;
+      esac;
+
+  -- * If the door is open, do not send move commands to the cabin.
+  -- * If there is a pending request at the current position
+  --   and the cabin is moving, stop it.
+  -- * If there are pending requests both at higher and at lower positions,
+  --   keep moving in "last_dir".
+  -- * If there are pending requests at higher (lower) positions,
+  --   move up (down).
+  -- * Otherwise, do not send commands to the cabin.
+  ASSIGN
+    cmd :=
+      case
+        !moving					  : case  -- not moving case
+									  pending_here & !doorOpened  : openDoor;
+									  pending_up & pending_down	  : openDoor;-- ?e10. check if it is ok even though we remove this case(ex) floor1 and 3 button pressed at the same time when elevator is in 2 floor.
+                                      pending_up   & doorOpened   : closeDoor;
+									  pending_down & doorOpened   : closeDoor;
+									  TRUE: openDoor;
+									esac;
+		pending_here              : stop;                                    
+        pending_up & pending_down : case
+                                      last_dir = up   : movingUp;
+                                      last_dir = down : movingDown;									  
+                                    esac;
+		pending_up              : movingUp;                                    
+        pending_up                : movingUp;
+        pending_down              : movingDown;
+        TRUE                      : openDoor;--?having this , we might don't need e10.
+      esac;
+
+---------------------------------------------------------------------------
+-- CLOCK                                                                 --
+---------------------------------------------------------------------------
+	
+MODULE CLOCK(carry_in)
+VAR
+  value : boolean;
+ASSIGN
+  init(value) := FALSE;
+  next(value) := value xor carry_in;
+DEFINE
+  carry_out := value xor carry_in;
+
+---------------------------------------------------------------------------
+-- MAIN                                                                  --
+---------------------------------------------------------------------------
+
+-- The main module shows the connection between modules.
+
+MODULE main
+  VAR 
+    
+    floor1 :  Floor(10,elevator.elevatorPosition,elevator.doorOpened);
+	floor2 :  Floor(20,elevator.elevatorPosition,elevator.doorOpened);
+	floor3 :  Floor(30,elevator.elevatorPosition,elevator.doorOpened);
+    bit0 : CLOCK(TRUE);
+	elevator :  Elevator(bit0.carry_out, ctrl.cmd);
+	
+    
+    ctrl :  CTRL(elevator.moving, elevator.direction,elevator.elevatorPosition,  elevator.doorOpened,
+                elevator.button1Pressed, elevator.button2Pressed, elevator.button3Pressed, floor1.reqButton,floor2.reqButton,floor3.reqButton);
+
+		
+DEFINE
+    hasAnyFloorRequest := (floor1.reqButton | floor2.reqButton | floor3.reqButton); -- if elevator position and floorPoistion is same, it is service.
+    hasElevatorBtnPressed := (elevator.button1Pressed | elevator.button2Pressed | elevator.button3Pressed); -- if elevator position and floorPoistion is same, it is service.
+	
+FAIRNESS !(hasAnyFloorRequest | hasElevatorBtnPressed)
+
+---------------------------------------------------------------------------
+-- REQUIREMENTS                                                          --
+---------------------------------------------------------------------------
+--  When the OpenDoor button is pressed, the doors remain open for an extra time unit
+--  The elevator takes 2 time units to move between two consecutive floors
+-- the user should not be able to keep the door open infinitely often if there is a request for service.
+
+-- 1. Calls to the elevator from floors (i.e., floor button) are eventually serviced.
+	
+	CTLSPEC AG( (floor1.reqButton -> AF(floor1.serviced))& (floor2.reqButton -> AF(floor2.serviced)) &  (floor3.reqButton -> AF(floor3.serviced)) )
+	
+-- 2. Calls from within the elevator (elev. button) are eventually serviced.
+		
+	--CTLSPEC AG( elevator.button1Pressed -> AF( elevator.position = 20 & elevator.doorOpened ))
+	CTLSPEC AG( elevator.button1Pressed -> AF( elevator.elevButton1Serviced)) & AG( elevator.button2Pressed -> AF( elevator.elevButton2Serviced)) & AG( elevator.button3Pressed -> AF( elevator.elevButton3Serviced))
+
+	-- 3. The elevator never moves with its doors open
+	CTLSPEC AG !( elevator.moving & (elevator.doorOpened))
+	
+	-- 4. The elevator doors remain open until there is a request to use it
+	--CTLSPEC AG( elevator.doorOpened -> A[(elevator.doorOpened ) U hasAnyFloorRequest])
+	
+	-- 6. If there are no requests for another floor, the elevator should not move
+	CTLSPEC AG (!(floor1.reqButton | floor2.reqButton | floor3.reqButton) -> !(elevator.moving) )
+	
+	-- 7. The elevator cannot change direction between floors.
+	CTLSPEC AG ( (elevator.direction= up) -> !(elevator.direction= down)) &  AG ( (elevator.direction= down) -> !(elevator.direction= up))
+	
+---------------------------------------------------------------------------
